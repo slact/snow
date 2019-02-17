@@ -216,6 +216,7 @@ enum {
 	_SNOW_OPT_LOG,
 	_SNOW_OPT_RERUN_FAILED,
 	_SNOW_OPT_GDB,
+	_SNOW_OPT_TAP,
 	_SNOW_OPT_LAST,
 };
 
@@ -265,8 +266,10 @@ struct _snow {
 	int in_before_each;
 	int in_after_each;
 	int rerunning_case;
+	int num_tests;
 	struct {
 		int success;
+		int number;
 		const char *name;
 		double start_time;
 		struct _snow_arr defers;
@@ -377,9 +380,8 @@ static void _snow_print_case_begin(void) {
 
 	_snow.print.prev_print = _SNOW_PRINT_CASE;
 
-	if (!_snow.opts[_SNOW_OPT_MAYBES].boolval)
+	if (!_snow.opts[_SNOW_OPT_MAYBES].boolval || _snow.opts[_SNOW_OPT_TAP].boolval)
 		return;
-
 	if (_snow.opts[_SNOW_OPT_COLOR].boolval) {
 		_snow_print(
 			"%s" SNOW_COLOR_BOLD SNOW_COLOR_MAYBE "? "
@@ -406,22 +408,26 @@ static void _snow_print_case_success(void) {
 
 	if (_snow.print.need_cr)
 		_snow_print(" \r");
-
-	if (_snow.opts[_SNOW_OPT_COLOR].boolval) {
-		_snow_print(
-			"%s" SNOW_COLOR_BOLD SNOW_COLOR_SUCCESS "✓ "
-			SNOW_COLOR_RESET SNOW_COLOR_SUCCESS "Success: "
-			SNOW_COLOR_RESET SNOW_COLOR_DESC "%s"
-			SNOW_COLOR_RESET,
-			spaces, _snow.current_case.name);
-	} else {
-		_snow_print(
-			"%s✓ Success: %s", spaces, _snow.current_case.name);
+	if (_snow.opts[_SNOW_OPT_TAP].boolval) {
+		_snow_print("ok %i - %s: %s",  _snow.current_case.number, _snow.current_desc->full_name, _snow.current_case.name);
 	}
+	else {
+		if (_snow.opts[_SNOW_OPT_COLOR].boolval) {
+			_snow_print(
+				"%s" SNOW_COLOR_BOLD SNOW_COLOR_SUCCESS "✓ "
+				SNOW_COLOR_RESET SNOW_COLOR_SUCCESS "Success: "
+				SNOW_COLOR_RESET SNOW_COLOR_DESC "%s"
+				SNOW_COLOR_RESET,
+				spaces, _snow.current_case.name);
+		} else {
+			_snow_print(
+				"%s✓ Success: %s", spaces, _snow.current_case.name);
+		}
 
-	if (_snow.opts[_SNOW_OPT_TIMER].boolval) {
-		_snow_print(" ");
-		_snow_print_timer(_snow.current_case.start_time);
+		if (_snow.opts[_SNOW_OPT_TIMER].boolval) {
+			_snow_print(" ");
+			_snow_print_timer(_snow.current_case.start_time);
+		}
 	}
 
 	_snow_print("\n");
@@ -433,17 +439,21 @@ static char *_snow_print_case_failure(void) {
 
 	if (_snow.print.need_cr)
 		_snow_print(" \r");
-
-	if (_snow.opts[_SNOW_OPT_COLOR].boolval) {
-		_snow_print(
-			"%s" SNOW_COLOR_BOLD SNOW_COLOR_FAIL "✕ "
-			SNOW_COLOR_RESET SNOW_COLOR_FAIL "Failed:  "
-			SNOW_COLOR_RESET SNOW_COLOR_DESC "%s"
-			SNOW_COLOR_RESET ":\n",
-			spaces, _snow.current_case.name);
-	} else {
-		_snow_print(
-			"%s✕ Failed:  %s:\n", spaces, _snow.current_case.name);
+	if (_snow.opts[_SNOW_OPT_TAP].boolval) {
+		_snow_print("not ok %i - %s: %s\n",  _snow.current_case.number, _snow.current_desc->full_name, _snow.current_case.name);
+	}
+	else {
+		if (_snow.opts[_SNOW_OPT_COLOR].boolval) {
+			_snow_print(
+				"%s" SNOW_COLOR_BOLD SNOW_COLOR_FAIL "✕ "
+				SNOW_COLOR_RESET SNOW_COLOR_FAIL "Failed:  "
+				SNOW_COLOR_RESET SNOW_COLOR_DESC "%s"
+				SNOW_COLOR_RESET ":\n",
+				spaces, _snow.current_case.name);
+		} else {
+			_snow_print(
+				"%s✕ Failed:  %s:\n", spaces, _snow.current_case.name);
+		}
 	}
 
 	return spaces;
@@ -451,6 +461,7 @@ static char *_snow_print_case_failure(void) {
 
 __attribute__((unused))
 static void _snow_print_desc_begin_index(size_t index) {
+
 	if (index > 0) {
 		struct _snow_desc *parent = _snow_arr_get(&_snow.desc_stack, index - 1);
 		if (!parent->printed)
@@ -462,7 +473,7 @@ static void _snow_print_desc_begin_index(size_t index) {
 
 	struct _snow_desc *desc = _snow_arr_get(&_snow.desc_stack, index);
 	char *spaces = _snow_spaces(index);
-
+	
 	if (_snow.opts[_SNOW_OPT_COLOR].boolval) {
 		_snow_print(
 			"%s" SNOW_COLOR_BOLD "Testing %s" SNOW_COLOR_RESET ":\n",
@@ -476,12 +487,16 @@ static void _snow_print_desc_begin_index(size_t index) {
 
 __attribute__((unused))
 static void _snow_print_desc_begin(void) {
+	if (_snow.opts[_SNOW_OPT_TAP].boolval) return;
 	if (_snow.opts[_SNOW_OPT_QUIET].boolval) return;
 	_snow_print_desc_begin_index(_snow.desc_stack.length - 1);
 }
 
 __attribute__((unused))
 static void _snow_print_desc_end(void) {
+	if(_snow.opts[_SNOW_OPT_TAP].boolval) {
+		return;
+	}
 	if (_snow.opts[_SNOW_OPT_QUIET].boolval) return;
 	char *spaces = _snow_spaces(_snow.desc_stack.length - 1);
 
@@ -520,12 +535,17 @@ static void _snow_print_desc_end(void) {
 	} \
 	do { \
 		char *spaces = _snow_print_case_failure(); \
-		_snow_print("%s    ", spaces); \
-		_snow_print(__VA_ARGS__); \
-		_snow_print("\n"); \
-		_snow_print("%s    in %s:%i(%s)\n", spaces, \
-			_snow.filename, _snow.linenum, _snow.current_desc->full_name); \
-		_snow_case_end(0); \
+		if (_snow.opts[_SNOW_OPT_TAP].boolval) { \
+			_snow_case_end(0); \
+		} \
+		else { \
+			_snow_print("%s    ", spaces); \
+			_snow_print(__VA_ARGS__); \
+			_snow_print("\n"); \
+			_snow_print("%s    in %s:%i(%s)\n", spaces, \
+				_snow.filename, _snow.linenum, _snow.current_desc->full_name); \
+			_snow_case_end(0); \
+		} \
 	} while (0)
 
 #define _snow_fail_expl(expl, fmt, ...) \
@@ -565,6 +585,7 @@ static void _snow_init(void) {
 	_snow_opt_bool(_SNOW_OPT_TIMER,        "timer",        't');
 	_snow_opt_bool(_SNOW_OPT_RERUN_FAILED, "rerun-failed", '\0');
 	_snow_opt_bool(_SNOW_OPT_GDB,          "gdb",          'g');
+	_snow_opt_bool(_SNOW_OPT_TAP,          "TAP",          '\0');
 
 	_snow_opt_str(_SNOW_OPT_LOG, "log", 'l', "-");
 
@@ -682,6 +703,8 @@ static void _snow_desc_end(void) {
 		_snow_arr_reset(&_snow.current_case.defers); \
 		_snow_print_case_begin(); \
 		_snow.current_desc->num_tests += 1; \
+		_snow.num_tests += 1; \
+		_snow.current_case.number = _snow.num_tests; \
 		if (_snow.current_desc->has_before_jmp) { \
 			if (setjmp(_snow.current_case.before_jmp_ret) == 0) { \
 				_snow.in_before_each = 1; \
@@ -830,6 +853,9 @@ static void _snow_usage(char *argv0)
 		"                    'snow_break' function. Used by --gdb.\n"
 		"                    Default: off.\n"
 		"\n"
+		"    --TAP:          Output results using the Test Anything Protocol\n"
+		"                    Default: off.\n"
+		"\n"
 		"    --gdb, -g:      Run the test suite on GDB, and break and re-run\n"
 		"                    test cases which fail.\n"
 		"                    Default: off.\n");
@@ -950,6 +976,7 @@ static int snow_main_function(int argc, char **argv) {
 	_snow_opt_default(_SNOW_OPT_TIMER, 1);
 	_snow_opt_default(_SNOW_OPT_RERUN_FAILED, 0);
 	_snow_opt_default(_SNOW_OPT_GDB, 0);
+	_snow_opt_default(_SNOW_OPT_TAP, 0);
 
 	// If --gdb was passed, re-run under GDB
 	if (_snow.opts[_SNOW_OPT_GDB].boolval) {
@@ -1072,8 +1099,11 @@ static int snow_main_function(int argc, char **argv) {
 
 		if (!_snow.opts[_SNOW_OPT_QUIET].boolval)
 			_snow_print("\n");
-
-		if (should_print_total) {
+		
+		if(_snow.opts[_SNOW_OPT_TAP].boolval) {
+			_snow_print("1..%i\n", total_num_tests);
+		}
+		else if (should_print_total) {
 			if (_snow.opts[_SNOW_OPT_COLOR].boolval) {
 				_snow_print(
 						SNOW_COLOR_BOLD "Total: Passed %i/%i tests." SNOW_COLOR_RESET,
